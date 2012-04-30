@@ -735,6 +735,82 @@ _.extend(Meteor._LivedataServer.prototype, {
     });
   },
 
+  // Handle all the configuration needed 
+  filters: function(filters) {
+    var self = this;
+
+    // Makes an array from a scalar unless it's undefined
+    var makeArray = function(val) {
+      var arrayVal = val;
+      if (!_.isUndefined(arrayVal) && !_.isArray(arrayVal)) {
+        arrayVal = [arrayVal];
+      }
+      return arrayVal;
+    };
+    
+    // Wrap the filter around the handler
+    var wrapHandler = function(handler, filter) {
+      return function() {
+        var returnVal = filter.handler.apply(null, arguments);
+        return handler.apply(null, makeArray(returnVal));
+      };
+    };
+
+    // Munge filter setup info so we can do cool shorthand configuration tricks
+    var normalizeFilters = function(filters) {
+      var handler, next;
+      var normalized = [];
+
+      while (filter = filters.shift()) {
+        next = filters.shift();
+        // Allow passing in a filter handler followed by a configuration literal
+        if (_.isFunction(filter) && !_.isFunction(next) && _.isUndefined(next['filter'])) {
+          handler = filter;
+          next['handler'] = handler;
+          filter = next;
+        } else {
+          // Otherwise just put it back
+          filters.unshift(next);
+        }
+        // Allow passing in a filter method without any configuration
+        if (_.isFunction(filter)) {
+          filter = { handler: filter };
+        }
+        // Allow scalar values for `except` and `only` configuration
+        filter['except'] = makeArray(filter['except']);
+        filter['only'] = makeArray(filter['only']);
+
+        // Ok, it's ready
+        normalized.unshift(filter);
+      }
+      return normalized;
+    };
+
+    // If it's whitelisted and it's not blacklisted wrap the filter around the method
+    var addFilter = function(filter) { //TODO: check style
+      _.each(self.method_handlers, function(handler, name) {
+        // Don't add the filter if...
+        if (// It's not in the `only` list
+          (filter['only'] && filter['only'].indexOf(name) < 0)
+            ||
+          // Or it's on the `except` list
+          (filter['except'] && filter['except'].indexOf(name) >= 0)
+        ) {
+          return false;
+        }
+
+        // Ok, if we make it here wrap the handler with the filter
+        self.method_handlers[name] = wrapHandler(handler, filter);
+      });
+    };
+
+    // Normalize and wrap Meteor methods with filters based on configuration
+    filters = normalizeFilters(filters);
+    _.each(filters, function (filter) {
+      addFilter(filter);
+    });
+  },
+
   call: function (name /*, arguments */) {
     // if it's a function, the last argument is the result callback,
     // not a parameter to the remote method.
